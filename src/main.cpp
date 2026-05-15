@@ -7,7 +7,9 @@
 
 namespace {
 constexpr uint8_t kAccelerometerAddress = 0x68;
-constexpr uint8_t kThermistorPins[4] = {6, 7, 8, 10};
+constexpr uint8_t kMuxSignalPin = 6;
+constexpr uint8_t kMuxSelectPins[4] = {7, 8, 10, 18};
+constexpr uint8_t kThermistorMuxChannels[4] = {0, 1, 2, 3};
 constexpr float kReferenceResistorOhms = 100000.0f;
 constexpr float kThermistorNominalOhms = 100000.0f;
 constexpr float kThermistorBeta = 3950.0f;
@@ -57,8 +59,20 @@ bool readAccelerometer(float *ax, float *ay, float *az) {
   return true;
 }
 
-float readThermistorCelsius(uint8_t pin) {
-  const int adc = analogRead(pin);
+void selectMuxChannel(uint8_t channel) {
+  for (size_t i = 0; i < 4; ++i) {
+    const bool bitValue = ((channel >> i) & 0x01U) != 0U;
+    digitalWrite(kMuxSelectPins[i], bitValue ? HIGH : LOW);
+  }
+  delayMicroseconds(10);
+}
+
+float readThermistorCelsiusFromMux(uint8_t channel) {
+  if (channel > 15) {
+    return NAN;
+  }
+  selectMuxChannel(channel);
+  const int adc = analogRead(kMuxSignalPin);
   if (adc == 0 || adc >= kAdcMax) {
     return NAN;
   }
@@ -69,8 +83,23 @@ float readThermistorCelsius(uint8_t pin) {
   return (1.0f / steinhart) - 273.15f;
 }
 
+float mergeThermistorValues(const float *temps, size_t count) {
+  float sum = 0.0f;
+  size_t validCount = 0;
+  for (size_t i = 0; i < count; ++i) {
+    if (!isnan(temps[i])) {
+      sum += temps[i];
+      ++validCount;
+    }
+  }
+  if (validCount == 0) {
+    return NAN;
+  }
+  return sum / static_cast<float>(validCount);
+}
+
 String buildPayload(bool accelerometerOk, float ax, float ay, float az, float fallProbability, float activityScore,
-                    const float *temps) {
+                    const float *temps, float mergedTempC) {
   String payload = "{";
   if (accelerometerOk) {
     payload += "\"accelerometer\":{";
@@ -91,7 +120,10 @@ String buildPayload(bool accelerometerOk, float ax, float ay, float az, float fa
       payload += ",";
     }
   }
-  payload += "]}";
+  payload += "],";
+  payload += "\"thermistors_merged_c\":";
+  payload += isnan(mergedTempC) ? "null" : String(mergedTempC, 2);
+  payload += "}";
   return payload;
 }
 } // namespace
@@ -105,8 +137,10 @@ void setup() {
   Serial.println(accelerometerOk ? "Accelerometer initialized" : "Accelerometer init failed");
 
   analogReadResolution(12);
-  for (uint8_t pin : kThermistorPins) {
-    pinMode(pin, INPUT);
+  pinMode(kMuxSignalPin, INPUT);
+  for (uint8_t pin : kMuxSelectPins) {
+    pinMode(pin, OUTPUT);
+    digitalWrite(pin, LOW);
   }
 
   BLEDevice::init("OpenHestia-ESP32C3");
@@ -148,10 +182,11 @@ void loop() {
 
   float temps[4];
   for (size_t i = 0; i < 4; ++i) {
-    temps[i] = readThermistorCelsius(kThermistorPins[i]);
+    temps[i] = readThermistorCelsiusFromMux(kThermistorMuxChannels[i]);
   }
+  const float mergedTempC = mergeThermistorValues(temps, 4);
 
-  const String payload = buildPayload(accelerometerOk, ax, ay, az, fallProbability, activityScore, temps);
+  const String payload = buildPayload(accelerometerOk, ax, ay, az, fallProbability, activityScore, temps, mergedTempC);
   Serial.println(payload);
   if (dataCharacteristic != nullptr) {
     dataCharacteristic->setValue(payload.c_str());
