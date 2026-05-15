@@ -9,6 +9,7 @@ Proyecto PlatformIO para ESP32-C3 en C++ (Arduino) que integra:
 ## Pines usados
 
 - Termistores: GPIO0, GPIO1, GPIO3 y GPIO4 (se evita GPIO2 por función de strapping).
+- Nota: GPIO0 participa en el arranque, por lo que el divisor del termistor en ese pin no debe forzar nivel bajo durante boot.
 
 ## Compilación
 

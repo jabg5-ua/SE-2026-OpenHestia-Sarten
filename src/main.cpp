@@ -59,7 +59,7 @@ bool readAccelerometer(float *ax, float *ay, float *az) {
 
 float readThermistorCelsius(uint8_t pin) {
   const int adc = analogRead(pin);
-  if (adc <= 0 || adc >= kAdcMax) {
+  if (adc == 0 || adc == kAdcMax) {
     return NAN;
   }
 
@@ -126,7 +126,7 @@ void setup() {
 
 void loop() {
   static uint32_t lastUpdateMs = 0;
-  if (millis() - lastUpdateMs < 1000) {
+  if ((millis() - lastUpdateMs) < 1000) {
     delay(20);
     return;
   }
