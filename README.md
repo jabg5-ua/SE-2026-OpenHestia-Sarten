@@ -8,7 +8,7 @@ Proyecto PlatformIO para ESP32-C3 en C++ (Arduino) que integra:
 
 ## Pines usados
 
-- Termistores: GPIO1, GPIO3, GPIO4 y GPIO5.
+- Termistores: GPIO6, GPIO7, GPIO8 y GPIO9.
 
 ## Compilación
 

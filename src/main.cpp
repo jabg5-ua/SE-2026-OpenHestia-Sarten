@@ -7,7 +7,7 @@
 
 namespace {
 constexpr uint8_t kAccelerometerAddress = 0x68;
-constexpr uint8_t kThermistorPins[4] = {1, 3, 4, 5};
+constexpr uint8_t kThermistorPins[4] = {6, 7, 8, 9};
 constexpr float kReferenceResistorOhms = 100000.0f;
 constexpr float kThermistorNominalOhms = 100000.0f;
 constexpr float kThermistorBeta = 3950.0f;
@@ -126,11 +126,12 @@ void setup() {
 
 void loop() {
   static uint32_t lastUpdateMs = 0;
-  if ((millis() - lastUpdateMs) < 1000) {
+  const uint32_t nowMs = millis();
+  if (static_cast<uint32_t>(nowMs - lastUpdateMs) < 1000U) {
     delay(20);
     return;
   }
-  lastUpdateMs = millis();
+  lastUpdateMs = nowMs;
 
   float ax = 0.0f;
   float ay = 0.0f;
