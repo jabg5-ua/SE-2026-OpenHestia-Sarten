@@ -6,6 +6,10 @@ Proyecto PlatformIO para ESP32-C3 en C++ (Arduino) que integra:
 - Inferencia TinyML ligera sobre aceleración (probabilidad de caída y actividad).
 - Lectura de 4 termistores de 100kΩ por ADC.
 
+## Pines usados
+
+- Termistores: GPIO0, GPIO1, GPIO3 y GPIO4 (se evita GPIO2 por función de strapping).
+
 ## Compilación
 
 ```bash

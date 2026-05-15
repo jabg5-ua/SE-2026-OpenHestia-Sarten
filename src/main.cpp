@@ -7,7 +7,7 @@
 
 namespace {
 constexpr uint8_t kAccelerometerAddress = 0x68;
-constexpr uint8_t kThermistorPins[4] = {0, 1, 2, 3};
+constexpr uint8_t kThermistorPins[4] = {0, 1, 3, 4};
 constexpr float kReferenceResistorOhms = 100000.0f;
 constexpr float kThermistorNominalOhms = 100000.0f;
 constexpr float kThermistorBeta = 3950.0f;
@@ -69,15 +69,21 @@ float readThermistorCelsius(uint8_t pin) {
   return (1.0f / steinhart) - 273.15f;
 }
 
-String buildPayload(float ax, float ay, float az, float fallProbability, float activityScore, const float *temps) {
+String buildPayload(bool accelerometerOk, float ax, float ay, float az, float fallProbability, float activityScore,
+                    const float *temps) {
   String payload = "{";
-  payload += "\"accelerometer\":{";
-  payload += "\"ax\":" + String(ax, 3) + ",";
-  payload += "\"ay\":" + String(ay, 3) + ",";
-  payload += "\"az\":" + String(az, 3) + "},";
-  payload += "\"tinyml\":{";
-  payload += "\"fall_probability\":" + String(fallProbability, 3) + ",";
-  payload += "\"activity_score\":" + String(activityScore, 3) + "},";
+  if (accelerometerOk) {
+    payload += "\"accelerometer\":{";
+    payload += "\"ax\":" + String(ax, 3) + ",";
+    payload += "\"ay\":" + String(ay, 3) + ",";
+    payload += "\"az\":" + String(az, 3) + "},";
+    payload += "\"tinyml\":{";
+    payload += "\"fall_probability\":" + String(fallProbability, 3) + ",";
+    payload += "\"activity_score\":" + String(activityScore, 3) + "},";
+  } else {
+    payload += "\"accelerometer\":null,";
+    payload += "\"tinyml\":null,";
+  }
   payload += "\"thermistors_c\":[";
   for (size_t i = 0; i < 4; ++i) {
     payload += isnan(temps[i]) ? "null" : String(temps[i], 2);
@@ -129,18 +135,22 @@ void loop() {
   float ax = 0.0f;
   float ay = 0.0f;
   float az = 0.0f;
-  readAccelerometer(&ax, &ay, &az);
+  const bool accelerometerOk = readAccelerometer(&ax, &ay, &az);
 
   float fallProbability = 0.0f;
   float activityScore = 0.0f;
-  tinyMlPredict(ax, ay, az, &fallProbability, &activityScore);
+  if (accelerometerOk) {
+    tinyMlPredict(ax, ay, az, &fallProbability, &activityScore);
+  } else {
+    Serial.println("Accelerometer read failed");
+  }
 
   float temps[4];
   for (size_t i = 0; i < 4; ++i) {
     temps[i] = readThermistorCelsius(kThermistorPins[i]);
   }
 
-  const String payload = buildPayload(ax, ay, az, fallProbability, activityScore, temps);
+  const String payload = buildPayload(accelerometerOk, ax, ay, az, fallProbability, activityScore, temps);
   Serial.println(payload);
   if (dataCharacteristic != nullptr) {
     dataCharacteristic->setValue(payload.c_str());
