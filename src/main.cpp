@@ -7,7 +7,7 @@
 
 namespace {
 constexpr uint8_t kAccelerometerAddress = 0x68;
-constexpr uint8_t kThermistorPins[4] = {0, 1, 3, 4};
+constexpr uint8_t kThermistorPins[4] = {1, 3, 4, 5};
 constexpr float kReferenceResistorOhms = 100000.0f;
 constexpr float kThermistorNominalOhms = 100000.0f;
 constexpr float kThermistorBeta = 3950.0f;
@@ -59,7 +59,7 @@ bool readAccelerometer(float *ax, float *ay, float *az) {
 
 float readThermistorCelsius(uint8_t pin) {
   const int adc = analogRead(pin);
-  if (adc == 0 || adc == kAdcMax) {
+  if (adc == 0 || adc >= kAdcMax) {
     return NAN;
   }
 
