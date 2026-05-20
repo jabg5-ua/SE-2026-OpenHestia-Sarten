@@ -205,7 +205,6 @@ void setup()
 
     analogReadResolution(12);
 
-    xTaskCreate(taskTemperatura, "TareaTemp", 4096, NULL, 1, NULL);
 
     // Iniciar bus I2C
     Wire.begin(8, 9);
