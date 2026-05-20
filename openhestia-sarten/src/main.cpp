@@ -4,6 +4,10 @@
 #include <Adafruit_MPU6050.h>
 #include <Adafruit_Sensor.h>
 #include <jabg5-ua-project-1_inferencing.h>
+#include <BLEDevice.h>
+#include <BLEServer.h>
+#include <BLE2902.h>
+//#include <BLEUtils.h>
 
 //direccion de acelerometro
 Adafruit_MPU6050 mpu;
@@ -21,6 +25,12 @@ const int MPU_ADDR = 0x68;
 #define BCOEFFICIENT 3950
 
 #define SAMPLE_INTERVAL_MS 7000
+
+// ── Parámetros BLE ────────────────────────────────────────────
+#define PIN_BLUETOOTH 6
+#define DEVICE_NAME         "HESTIA_C3"
+#define SERVICE_UUID        "00000000-0000-0000-0000-000000000000" // UUIDs inventadas
+#define CHARACTERISTIC_UUID "00000000-0000-0000-0000-0000000b0000"
 
 // ─────────────────────────────────────────────────────────────
 
@@ -137,6 +147,58 @@ void taskInferencia(void *pvParameters) {
     }
 }
 
+void taskBluetooth(void *pvParameters) {
+    BLEServer *bleServer;
+    BLEService *service;
+    BLECharacteristic *characteristic;
+    BLEAdvertising *advertising;
+
+    BLEDevice::init(DEVICE_NAME);
+    bleServer = BLEDevice::createServer();
+    service = bleServer->createService(SERVICE_UUID);
+    characteristic = service->createCharacteristic(
+        CHARACTERISTIC_UUID,
+        BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_NOTIFY);
+
+    characteristic->setValue("Initializing...");
+    service->start();
+    advertising = BLEDevice::getAdvertising();
+
+    bool adv = false;
+    unsigned long milisegundos;
+
+    for (;;) {
+        if (!bleServer->getConnectedCount()) {
+            if (!adv && digitalRead(PIN_BLUETOOTH)) {
+                advertising->start();
+                adv = true;
+                Serial.println("Buscando fogón...");
+            }
+            else if (adv && !digitalRead(PIN_BLUETOOTH)) {
+                advertising->stop();
+                adv = false;
+                Serial.println("Detenido");
+            }
+            vTaskDelay(100);
+        }
+        else {
+            if (adv) {
+                advertising->stop();
+                adv = false;
+                Serial.println("Conectado al fogón");
+            }
+
+            // Enviar millis() al fogón
+            milisegundos = millis();
+            Serial.print("Enviando millis(): ");
+            Serial.println(milisegundos);
+            characteristic->setValue(String(milisegundos).c_str());
+            characteristic->notify();
+            vTaskDelay(1000);
+        }
+    }
+}
+
 void setup()
 {
     Serial.begin(115200);
@@ -167,7 +229,7 @@ void setup()
     }
 
     xTaskCreate(taskInferencia, "TareaIA", 16384, NULL, 1, NULL);
-
+    xTaskCreate(taskBluetooth, "TareaBLE", 2048, NULL, 1, NULL);
 }
 
 void loop() {}
