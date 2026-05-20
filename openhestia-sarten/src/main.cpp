@@ -3,15 +3,30 @@
 #include <Wire.h>
 #include <Adafruit_MPU6050.h>
 #include <Adafruit_Sensor.h>
+#include <BLEDevice.h>
+#include <BLEUtils.h>
 #include <jabg5-ua-project-1_inferencing.h>
 #include <BLEDevice.h>
 #include <BLEServer.h>
 #include <BLE2902.h>
 //#include <BLEUtils.h>
 
+// ── VARIABLE GLOBAL PARA LA TEMPERATURA ───────────────────────
+volatile float temperaturaMediaGlobal = 0.0f;
+
+// ── CONFIGURACIÓN BLE ─────────────────────────────────────────
+BLEAdvertising *pAdvertising;
+
 //direccion de acelerometro
 Adafruit_MPU6050 mpu;
 const int MPU_ADDR = 0x68;
+
+// Estructura binaria compacta para enviar por el aire
+struct __attribute__((packed)) PayloadSarten {
+    uint16_t companyId = 0xFFFF; // Identificador propio
+    uint8_t sartenColocada;      // 1 = Sí (dejar sartén detectado)
+    float temperaturaMedia;      // Sacada de la variable global
+};
 
 // ── Pines mux ─────────────────────────────────────────────────
 #define MUX_S0 1
@@ -66,8 +81,6 @@ void taskTemperatura(void *pvParameters)
 
     while (true)
     {
-        Serial.println("─────────────────────────────");
-
         float suma = 0.0f;
         uint8_t validos = 0;
 
@@ -91,14 +104,20 @@ void taskTemperatura(void *pvParameters)
             }
             else
             {
-                Serial.printf("  C%d → raw=%.0f  T= %.2f °C\n", ch, raw, temp);
+                //Serial.printf("  C%d → raw=%.0f  T= %.2f °C\n", ch, raw, temp);
                 suma += temp;
                 validos++;
             }
         }
 
         if (validos > 0)
-            Serial.printf("  >> MEDIA: %.2f °C (%d sensor/es)\n", suma / validos, validos);
+        {
+            float mediaCalculada = suma / validos;
+            
+            temperaturaMediaGlobal = mediaCalculada;
+
+            Serial.printf("🔥 [TEMP] Media actualizada globalmente: %.2f °C\n", temperaturaMediaGlobal);
+        }
         else
             Serial.println("  >> Sin sensores válidos");
 
@@ -107,14 +126,11 @@ void taskTemperatura(void *pvParameters)
 }
 
 void taskInferencia(void *pvParameters) {
-    while (true) {
-        // 1. Crear el buffer para la IA
-        float buffer[EI_CLASSIFIER_DSP_INPUT_FRAME_SIZE] = { 0 };
+    static float buffer[EI_CLASSIFIER_DSP_INPUT_FRAME_SIZE] = { 0 };
 
-        // 2. Llenar el buffer a la frecuencia exacta que pide Edge Impulse
+    while (true) {
+        // 1. Capturar movimiento del MPU6050
         for (size_t ix = 0; ix < EI_CLASSIFIER_DSP_INPUT_FRAME_SIZE; ix += 3) {
-            uint64_t next_tick = micros() + (EI_CLASSIFIER_INTERVAL_MS * 1000);
-            
             sensors_event_t a, g, temp;
             mpu.getEvent(&a, &g, &temp);
 
@@ -122,13 +138,10 @@ void taskInferencia(void *pvParameters) {
             buffer[ix + 1] = a.acceleration.y;
             buffer[ix + 2] = a.acceleration.z;
 
-            // Esperar al siguiente tick, pero cediendo tiempo al ESP32 (FreeRTOS)
-            while (micros() < next_tick) { 
-                taskYIELD(); 
-            }
+            vTaskDelay(pdMS_TO_TICKS(EI_CLASSIFIER_INTERVAL_MS));
         }
 
-        // 3. Convertir buffer y ejecutar clasificador
+        // 2. Procesar con Edge Impulse
         signal_t signal;
         numpy::signal_from_buffer(buffer, EI_CLASSIFIER_DSP_INPUT_FRAME_SIZE, &signal);
         
@@ -136,13 +149,58 @@ void taskInferencia(void *pvParameters) {
         EI_IMPULSE_ERROR r = run_classifier(&signal, &result, false);
         
         if (r == EI_IMPULSE_OK) {
-            Serial.println("=== PREDICCIÓN SARTÉN ===");
+            // 3. ENCONTRAR EL ESTADO MÁS ALTO (GANADOR)
+            int max_idx = 0;
+            float max_val = 0.0f;
+            
             for (size_t ix = 0; ix < EI_CLASSIFIER_LABEL_COUNT; ix++) {
-                Serial.printf("  %s: %.2f\n", result.classification[ix].label, result.classification[ix].value);
+                if (result.classification[ix].value > max_val) {
+                    max_val = result.classification[ix].value;
+                    max_idx = ix;
+                }
+            }
+
+            // Guardamos el nombre de la etiqueta ganadora
+            const char* etiquetaGanadora = result.classification[max_idx].label;
+            
+            Serial.printf("🤖 [IA] Estado más probable: %s (%.2f%%)\n", etiquetaGanadora, max_val * 100.0f);
+
+            // 4. ¿EL GANADOR ES "dejar sarten"?
+            // ⚠️ ATENCIÓN: Asegúrate de que "dejar sarten" esté escrito EXACTAMENTE igual que en Edge Impulse (ej: "dejar_sarten")
+            if (strcmp(etiquetaGanadora, "dejar sarten") == 0) {
+                
+                Serial.println("📡 [BLE] ¡Ventana abierta! Sincronizando con el fogón...");
+
+                // Preparar los datos introduciendo la TEMPERATURA de la variable global
+                PayloadSarten datos;
+                datos.sartenColocada = 1;
+                datos.temperaturaMedia = temperaturaMediaGlobal; // <-- Captura el valor global actual
+
+                // Meter los datos en el paquete publicitario
+                std::string dataStr((char*)&datos, sizeof(PayloadSarten));
+                BLEAdvertisementData oAdvertisementData;
+                oAdvertisementData.setManufacturerData(dataStr);
+                pAdvertising->setAdvertisementData(oAdvertisementData);
+
+                // Configurar ráfaga ultra rápida (20 ms de intervalo)
+                pAdvertising->setMinInterval(32); 
+                pAdvertising->setMaxInterval(32); 
+                
+                // ENCENDER BLUETOOTH
+                pAdvertising->start(); 
+
+                // ── VENTANA DE TIEMPO DE SINCRONIZACIÓN ──────────────────
+                // Mantenemos el Bluetooth emitiendo durante 4 segundos libres
+                vTaskDelay(pdMS_TO_TICKS(4000)); 
+                // ─────────────────────────────────────────────────────────
+
+                // APAGAR BLUETOOTH
+                pAdvertising->stop();
+                Serial.println("🛑 [BLE] Ventana de tiempo cerrada. Bluetooth apagado.");
             }
         }
         
-        // Pausa entre inferencias para no saturar
+        // Pausa de cortesía de medio segundo antes de volver a evaluar el movimiento
         vTaskDelay(pdMS_TO_TICKS(500)); 
     }
 }
@@ -209,7 +267,6 @@ void setup()
 
     analogReadResolution(12);
 
-    xTaskCreate(taskTemperatura, "TareaTemp", 4096, NULL, 1, NULL);
 
     // Iniciar bus I2C
     Wire.begin(8, 9);
@@ -228,6 +285,11 @@ void setup()
         Serial.println("¡Error al iniciar el MPU6050!");
     }
 
+    // INICIALIZAR BLE (Se configura pero se queda en reposo sin transmitir)
+    BLEDevice::init("Sarten-C3");
+    pAdvertising = BLEDevice::getAdvertising();
+
+    xTaskCreate(taskTemperatura, "TareaTemp", 4096, NULL, 1, NULL);
     xTaskCreate(taskInferencia, "TareaIA", 16384, NULL, 1, NULL);
     xTaskCreate(taskBluetooth, "TareaBLE", 2048, NULL, 1, NULL);
 }
