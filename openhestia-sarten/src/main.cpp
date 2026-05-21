@@ -214,7 +214,6 @@ void taskInferencia(void *pvParameters) {
                     Serial.println("🛑 [BLE] Ventana de tiempo cerrada. Bluetooth apagado.");
                 } else {
                     Serial.println("⚠️ [IA] Sartén detectada pero el fogón ya está conectado. No se abre la ventana de sincronización.");
-                }
             }
         }
         
