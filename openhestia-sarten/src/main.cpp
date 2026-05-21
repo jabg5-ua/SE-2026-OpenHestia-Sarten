@@ -3,13 +3,11 @@
 #include <Wire.h>
 #include <Adafruit_MPU6050.h>
 #include <Adafruit_Sensor.h>
-#include <BLEDevice.h>
-#include <BLEUtils.h>
 #include <jabg5-ua-project-1_inferencing.h>
 #include <BLEDevice.h>
+#include <BLEUtils.h>
 #include <BLEServer.h>
 #include <BLE2902.h>
-//#include <BLEUtils.h>
 
 // ── VARIABLE GLOBAL PARA LA TEMPERATURA ───────────────────────
 volatile float temperaturaMediaGlobal = 0.0f;
@@ -209,9 +207,9 @@ void taskBluetooth(void *pvParameters) {
     BLEServer *bleServer;
     BLEService *service;
     BLECharacteristic *characteristic;
-    BLEAdvertising *advertising;
+    //BLEAdvertising *advertising;
 
-    BLEDevice::init(DEVICE_NAME);
+    //BLEDevice::init(DEVICE_NAME);
     bleServer = BLEDevice::createServer();
     service = bleServer->createService(SERVICE_UUID);
     characteristic = service->createCharacteristic(
@@ -220,13 +218,13 @@ void taskBluetooth(void *pvParameters) {
 
     characteristic->setValue("Initializing...");
     service->start();
-    advertising = BLEDevice::getAdvertising();
+    pAdvertising = BLEDevice::getAdvertising();
 
     bool adv = false;
-    unsigned long milisegundos;
+    float ultima_temperatura = 0.0;
 
     for (;;) {
-        if (!bleServer->getConnectedCount()) {
+        /*if (!bleServer->getConnectedCount()) {
             if (!adv && digitalRead(PIN_BLUETOOTH)) {
                 advertising->start();
                 adv = true;
@@ -245,15 +243,21 @@ void taskBluetooth(void *pvParameters) {
                 adv = false;
                 Serial.println("Conectado al fogón");
             }
+            */
+        if (bleServer->getConnectedCount()) {
+            if (temperaturaMediaGlobal != ultima_temperatura) {
+                ultima_temperatura = temperaturaMediaGlobal;
 
-            // Enviar millis() al fogón
-            milisegundos = millis();
-            Serial.print("Enviando millis(): ");
-            Serial.println(milisegundos);
-            characteristic->setValue(String(milisegundos).c_str());
-            characteristic->notify();
-            vTaskDelay(1000);
+                // Enviar temperatura media global al fogón
+                Serial.print("📡 [BLE] Enviando temperatura: ");
+                Serial.print(temperaturaMediaGlobal);
+                Serial.println(" °C");
+                characteristic->setValue(String(temperaturaMediaGlobal).c_str());
+                characteristic->notify();
+            }
         }
+        vTaskDelay(1000);
+        //}
     }
 }
 
@@ -287,11 +291,11 @@ void setup()
 
     // INICIALIZAR BLE (Se configura pero se queda en reposo sin transmitir)
     BLEDevice::init("Sarten-C3");
-    pAdvertising = BLEDevice::getAdvertising();
+    //pAdvertising = BLEDevice::getAdvertising();
 
     xTaskCreate(taskTemperatura, "TareaTemp", 4096, NULL, 1, NULL);
     xTaskCreate(taskInferencia, "TareaIA", 16384, NULL, 1, NULL);
-    xTaskCreate(taskBluetooth, "TareaBLE", 2048, NULL, 1, NULL);
+    xTaskCreate(taskBluetooth, "TareaBLE", 4096, NULL, 1, NULL); // Falla si bytes=2048
 }
 
 void loop() {}
