@@ -15,6 +15,9 @@ volatile float temperaturaMediaGlobal = 0.0f;
 // ── CONFIGURACIÓN BLE ─────────────────────────────────────────
 BLEAdvertising *pAdvertising;
 
+// ── VARIABLE GLOBAL PARA EL ESTADO DE CONEXIÓN ────────────────
+volatile bool dispositivoConectado = false;
+
 //direccion de acelerometro
 Adafruit_MPU6050 mpu;
 const int MPU_ADDR = 0x68;
@@ -24,6 +27,20 @@ struct __attribute__((packed)) PayloadSarten {
     uint16_t companyId = 0xFFFF; // Identificador propio
     uint8_t sartenColocada;      // 1 = Sí (dejar sartén detectado)
     float temperaturaMedia;      // Sacada de la variable global
+};
+
+// ── CLASE CALLBACK (SE EJECUTA AUTOMÁTICAMENTE) ───────────────
+class MisServerCallbacks : public BLEServerCallbacks {
+    void onConnect(BLEServer* pServer) override {
+        dispositivoConectado = true;
+        Serial.println("🔗 [BLE] ¡El fogón se ha CONECTADO a la sartén!");
+    }
+
+    void onDisconnect(BLEServer* pServer) override {
+        dispositivoConectado = false;
+        Serial.println("❌ [BLE] El fogón se ha DESCONECTADO.");
+        BLEDevice::startAdvertising(); // Permite que lo vuelvan a encontrar
+    }
 };
 
 // ── Pines mux ─────────────────────────────────────────────────
@@ -166,35 +183,38 @@ void taskInferencia(void *pvParameters) {
             // 4. ¿EL GANADOR ES "dejar sarten"?
             // ⚠️ ATENCIÓN: Asegúrate de que "dejar sarten" esté escrito EXACTAMENTE igual que en Edge Impulse (ej: "dejar_sarten")
             if (strcmp(etiquetaGanadora, "dejar sarten") == 0) {
-                
-                Serial.println("📡 [BLE] ¡Ventana abierta! Sincronizando con el fogón...");
+                if(!dispositivoConectado) {
+                    Serial.println("📡 [BLE] ¡Ventana abierta! Sincronizando con el fogón...");
 
-                // Preparar los datos introduciendo la TEMPERATURA de la variable global
-                PayloadSarten datos;
-                datos.sartenColocada = 1;
-                datos.temperaturaMedia = temperaturaMediaGlobal; // <-- Captura el valor global actual
+                    // Preparar los datos introduciendo la TEMPERATURA de la variable global
+                    PayloadSarten datos;
+                    datos.sartenColocada = 1;
+                    datos.temperaturaMedia = temperaturaMediaGlobal; // <-- Captura el valor global actual
 
-                // Meter los datos en el paquete publicitario
-                std::string dataStr((char*)&datos, sizeof(PayloadSarten));
-                BLEAdvertisementData oAdvertisementData;
-                oAdvertisementData.setManufacturerData(dataStr);
-                pAdvertising->setAdvertisementData(oAdvertisementData);
+                    // Meter los datos en el paquete publicitario
+                    std::string dataStr((char*)&datos, sizeof(PayloadSarten));
+                    BLEAdvertisementData oAdvertisementData;
+                    oAdvertisementData.setManufacturerData(dataStr);
+                    pAdvertising->setAdvertisementData(oAdvertisementData);
 
-                // Configurar ráfaga ultra rápida (20 ms de intervalo)
-                pAdvertising->setMinInterval(32); 
-                pAdvertising->setMaxInterval(32); 
-                
-                // ENCENDER BLUETOOTH
-                pAdvertising->start(); 
+                    // Configurar ráfaga ultra rápida (20 ms de intervalo)
+                    pAdvertising->setMinInterval(32); 
+                    pAdvertising->setMaxInterval(32); 
+                    
+                    // ENCENDER BLUETOOTH
+                    pAdvertising->start(); 
 
-                // ── VENTANA DE TIEMPO DE SINCRONIZACIÓN ──────────────────
-                // Mantenemos el Bluetooth emitiendo durante 4 segundos libres
-                vTaskDelay(pdMS_TO_TICKS(4000)); 
-                // ─────────────────────────────────────────────────────────
+                    // ── VENTANA DE TIEMPO DE SINCRONIZACIÓN ──────────────────
+                    // Mantenemos el Bluetooth emitiendo durante 4 segundos libres
+                    vTaskDelay(pdMS_TO_TICKS(4000)); 
+                    // ─────────────────────────────────────────────────────────
 
-                // APAGAR BLUETOOTH
-                pAdvertising->stop();
-                Serial.println("🛑 [BLE] Ventana de tiempo cerrada. Bluetooth apagado.");
+                    // APAGAR BLUETOOTH
+                    pAdvertising->stop();
+                    Serial.println("🛑 [BLE] Ventana de tiempo cerrada. Bluetooth apagado.");
+                } else {
+                    Serial.println("⚠️ [IA] Sartén detectada pero el fogón ya está conectado. No se abre la ventana de sincronización.");
+                }
             }
         }
         
@@ -207,10 +227,12 @@ void taskBluetooth(void *pvParameters) {
     BLEServer *bleServer;
     BLEService *service;
     BLECharacteristic *characteristic;
-    //BLEAdvertising *advertising;
 
-    //BLEDevice::init(DEVICE_NAME);
     bleServer = BLEDevice::createServer();
+    
+    // 1. AÑADE ESTA LÍNEA JUSTO AQUÍ:
+    bleServer->setCallbacks(new MisServerCallbacks());
+
     service = bleServer->createService(SERVICE_UUID);
     characteristic = service->createCharacteristic(
         CHARACTERISTIC_UUID,
@@ -220,44 +242,22 @@ void taskBluetooth(void *pvParameters) {
     service->start();
     pAdvertising = BLEDevice::getAdvertising();
 
-    bool adv = false;
     float ultima_temperatura = 0.0;
 
     for (;;) {
-        /*if (!bleServer->getConnectedCount()) {
-            if (!adv && digitalRead(PIN_BLUETOOTH)) {
-                advertising->start();
-                adv = true;
-                Serial.println("Buscando fogón...");
-            }
-            else if (adv && !digitalRead(PIN_BLUETOOTH)) {
-                advertising->stop();
-                adv = false;
-                Serial.println("Detenido");
-            }
-            vTaskDelay(100);
-        }
-        else {
-            if (adv) {
-                advertising->stop();
-                adv = false;
-                Serial.println("Conectado al fogón");
-            }
-            */
-        if (bleServer->getConnectedCount()) {
+        // 2. CAMBIA TU IF POR ESTA VARIABLE GLOBAL:
+        if (dispositivoConectado) {
             if (temperaturaMediaGlobal != ultima_temperatura) {
                 ultima_temperatura = temperaturaMediaGlobal;
 
-                // Enviar temperatura media global al fogón
-                Serial.print("📡 [BLE] Enviando temperatura: ");
+                Serial.print("📡 [BLE CONNECTED] Enviando temperatura activa: ");
                 Serial.print(temperaturaMediaGlobal);
                 Serial.println(" °C");
                 characteristic->setValue(String(temperaturaMediaGlobal).c_str());
                 characteristic->notify();
             }
         }
-        vTaskDelay(1000);
-        //}
+        vTaskDelay(pdMS_TO_TICKS(1000)); // Usa pdMS_TO_TICKS para FreeRTOS
     }
 }
 
